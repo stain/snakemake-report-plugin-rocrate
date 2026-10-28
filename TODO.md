@@ -325,18 +325,26 @@ The Provenance Run Crate builds on the Process Run Crate, so all of these
 apply. A4 handles the first two rows; A5 handles the last two.
 
 The current code puts the whole resolved Conda environment into the first or
-second row. The profile instead says that `softwareRequirements` names
-software, while "a more reproducible definition of a tool's runtime
-environment" belongs in an environment file referenced by `buildInstructions`.
+second row. The profile instead uses `softwareRequirements` to name the
+software a tool needs installed in order to run: the programs its command
+calls (`jq`, `blast`) and, for a script, the libraries the script uses (the
+profile's example lists NumPy for a Python script). Low-level libraries that
+almost every compiled program links against, such as the C runtime
+(`libgcc`) or OpenMP (`libgomp`), say nothing about what the rule does. They
+belong in the runtime environment, which the profile describes as "a more
+reproducible definition of a tool's runtime environment" in an environment
+file referenced by `buildInstructions` (A5).
 
 **Suggested fix:**
 - Always create the rule tool (`#rule-tool-…`) as the single `instrument` of
   each job's `CreateAction`, and as the `workExample` of its `HowToStep`.
-- List in its `softwareRequirements` only the packages *declared* in the
-  rule's environment YAML (`jq`), with the version that was actually
-  installed (`1.7.1`, from `conda-meta`). Transitive packages such as
-  `libgcc` and `_openmp_mutex` do not go here: they are part of the runtime
-  environment (A5).
+- List in its `softwareRequirements` the packages *declared* in the rule's
+  environment YAML, with the version that was actually installed (from
+  `conda-meta`). The YAML is where the workflow author names the software the
+  rule needs, e.g. `jq` 1.7.1 for `plot`, or `blast` for a search rule.
+  Packages that Conda only installed to satisfy those (here `oniguruma`,
+  `libgcc`, `_openmp_mutex`) are not listed. They are recorded in the
+  resolved environment file (A5).
 - Use `mainEntity` for the wrapped tool, as in
   [Tool wrapper dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies):
   the script for `script:` rules (A6), or the package chosen with
@@ -357,9 +365,14 @@ environment" belongs in an environment file referenced by `buildInstructions`.
 - Version property: the 0.5 examples use `version`, while 0.6 uses
   `softwareVersion` and says not to give both. `roc-validator` 0.11.4 accepts
   either. Keep `softwareVersion` for packages, and revisit in A14.
-- Add an option to choose between declared packages only (the default) and
-  all installed packages in `softwareRequirements`, for users who want the
-  full list in the metadata itself.
+- A YAML may also declare things that are not really the rule's software,
+  such as `python` or `pip`, or a package only pinned to fix a solver
+  problem. List them anyway: the plugin cannot tell the difference, and the
+  author chose to declare them. `--main-tool`/`mainEntity` is how to say which
+  one matters.
+- Rules without a `conda:` environment have no declared packages. For these,
+  `softwareRequirements` stays empty rather than guessed from the shell
+  command.
 - Update the README sections on `main-tool` and on how tools are modelled.
 
 ### A5. Tool runtime environment and container images
@@ -414,9 +427,9 @@ Could be split into a Conda PR and a container PR.*
      `conformsTo`, pointing to the Conda explicit-specification format.
    - Otherwise, generate an equivalent explicit specification from the job's
      `conda-meta` records (each package's URL and MD5) and package that
-     instead. This is where the transitive packages that A4 removes from
-     `softwareRequirements` end up, in a form that `conda create --file` can
-     re-instantiate.
+     instead. This is where the packages Conda installed only as dependencies
+     (which A4 leaves out of `softwareRequirements`) are recorded, in a form
+     that `conda create --file` can re-instantiate.
    - Name the generated file after the environment hash Snakemake uses, so that
      rules that share an environment share the file.
 3. **Container images:**
