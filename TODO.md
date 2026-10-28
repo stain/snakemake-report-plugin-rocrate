@@ -373,8 +373,10 @@ file referenced by `buildInstructions` (A5).
 - Python code in the workflow also has software requirements, and these are
   often not declared in any environment file:
   - `run:` blocks are inline Python executed inside the Snakemake process
-    itself. Snakemake does not allow `conda:` with `run:`, so the packages
-    they use come from the environment Snakemake is installed in.
+    itself, so the packages they use come from the environment Snakemake is
+    installed in. A `conda:` directive on a `run:` rule is accepted (checked
+    with Snakemake 9.27.1), but only applies to `shell()` calls made inside
+    the block, not to the Python code.
   - Top-level code and imports in the Snakefile (and included files) run in
     the same process, and `run:` blocks can use those imports.
   - `script:` rules without `conda:` run in whatever Python environment is
@@ -543,8 +545,15 @@ corresponding `OrganizeAction`".
 - Record the report-generation command (`sys.argv`) and the targets as the
   `OrganizeAction`'s `description`. Make clear that this is the report command,
   which may differ from the command that ran the jobs (see B1).
-- Read the Snakemake version from `.snakemake/metadata` if a future Snakemake
-  version stores it, and raise this upstream with Snakemake.
+- Use the header of Snakemake's own run logs (`.snakemake/log/*.snakemake.log`).
+  In Snakemake 9 this records, for each invocation, the workflow ID, the
+  Snakemake and Python versions, the full command, the config files and the
+  config MD5. This gives the run-time Snakemake version rather than the
+  report-time one, and the real invocation command. Match logs to jobs by
+  time. The same logs can drive the per-invocation grouping proposed in B1.
+- Raise upstream with Snakemake that `.snakemake/metadata` should record the
+  workflow ID or Snakemake version per job, so this does not depend on log
+  files that may have been deleted.
 
 **Considerations:** Config files may contain secrets or local paths. Add an
 option to exclude them, and reference excluded files with the A1 mechanism.
