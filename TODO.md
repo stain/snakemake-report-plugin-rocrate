@@ -370,9 +370,32 @@ file referenced by `buildInstructions` (A5).
   problem. List them anyway: the plugin cannot tell the difference, and the
   author chose to declare them. `--main-tool`/`mainEntity` is how to say which
   one matters.
-- Rules without a `conda:` environment have no declared packages. For these,
-  `softwareRequirements` stays empty rather than guessed from the shell
-  command.
+- Python code in the workflow also has software requirements, and these are
+  often not declared in any environment file:
+  - `run:` blocks are inline Python executed inside the Snakemake process
+    itself. Snakemake does not allow `conda:` with `run:`, so the packages
+    they use come from the environment Snakemake is installed in.
+  - Top-level code and imports in the Snakefile (and included files) run in
+    the same process, and `run:` blocks can use those imports.
+  - `script:` rules without `conda:` run in whatever Python environment is
+    active, typically Snakemake's own.
+
+  For these rules, find the imported top-level modules by parsing the code
+  with `ast` (the `run:` block's source, the Snakefile's top-level imports,
+  and the script). Map modules to distributions with
+  `importlib.metadata.packages_distributions()`, and record each
+  distribution's name and installed version in the rule tool's
+  `softwareRequirements`. Use PyPI release URLs as `@id`
+  (`https://pypi.org/project/pandas/2.2.3/`), as in the profile's NumPy
+  example. Skip standard-library modules (`sys.stdlib_module_names`).
+- Caveat for the Python packages above: they are read at report time from the
+  environment running the reporter, which may differ from the environment the
+  jobs ran in. This is the same limitation as the Snakemake version (A7).
+  Say so in the README, and consider recording the reporter environment's
+  Python version as well.
+- Shell-only rules without `conda:` (or `envmodules:`) have no declared
+  packages. Their `softwareRequirements` stays empty rather than being
+  guessed from the shell command.
 - Update the README sections on `main-tool` and on how tools are modelled.
 
 ### A5. Tool runtime environment and container images
