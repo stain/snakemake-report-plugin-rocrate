@@ -5,6 +5,11 @@ small test workflow and inspecting the crate with `rocrate-validator -l OPTIONAL
 and `runcrate report`. The generated crate passes all REQUIRED checks of
 `provenance-run-crate-0.5`, but is incomplete or inaccurate in the ways below.
 
+- [Part A](#part-a-plugin-issues-in-pull-request-order) lists plugin issues in
+  the order they should be addressed, one pull request each.
+- [Part B](#part-b-issues-that-may-need-changes-or-clarification-in-the-profiles)
+  lists issues that may need changes to the Workflow Run Crate profiles.
+
 Test workflow used (reproduces every item below):
 
 ```python
@@ -49,9 +54,95 @@ Reference documents:
 
 ---
 
-## Part A: Plugin issues
+## Pull request plan
+
+Each A-section below is intended as one pull request. The plan is built around
+three decisions:
+
+- **Stay on RO-Crate 1.1 and Workflow Run Crate 0.5 until the last PR (A14).**
+  The `roc-validator` release the plugin pins only has the 0.5 profiles, and
+  WorkflowHub needs Workflow RO-Crate 1.0 (built on RO-Crate 1.1). Every
+  earlier PR must therefore use only terms available in the RO-Crate 1.1
+  context plus the workflow-run context
+  (`https://w3id.org/ro/terms/workflow-run/context`, which defines `sha256`,
+  `resourceUsage`, `connection`, `ParameterConnection`, `environment` and
+  `containerImage`), and schema.org terms such as `DigitalDocument`.
+  1.3-only terms such as `localPath` wait for A14.
+- **Fix the tool model (A4) before anything that hangs metadata on tools.**
+  Scripts (A6), non-file parameters (A10), environments (A5) and rule-tool
+  `url`/`version` (A13) all attach to "the rule's tool". Today that is either
+  a rule tool or a list of Conda packages, depending on `--main-tool`.
+- **Settle the parameter scheme (A8, A9) before adding more parameters (A10)
+  and connections between them (A11).** All of these build parameter `@id`s in
+  `_add_formal_parameters`, and changing the scheme twice would churn tests
+  and output.
+
+| PR | Section | Size | Depends on | Changes existing output? |
+|---|---|---|---|---|
+| 1 | [A1](#a1-metadata-only-mode-writes-data-entities-outside-the-crate-root-bug) External / non-included files | M | A2 (soft: content-addressed IDs) | yes (bug fix, new options) |
+| 2 | [A2](#a2-file-entities-lack-fixity-and-size) File fixity and size | S | none | adds properties |
+| 3 | [A3](#a3-small-profile-details-actionstatus-position-singleton-values) Small profile details | S | none | adds properties |
+| 4 | [A4](#a4-tool-model-every-conda-package-becomes-an-instrument) Tool model | M | none | **yes**: changes instruments, `--main-tool` meaning |
+| 5 | [A5](#a5-conda-and-container-environments-via-buildinstructions) Environments | S | A4 | yes (`subjectOf` → `buildInstructions`) |
+| 6 | [A6](#a6-workflow-source-is-incomplete-include-script-notebook-wrapper) Workflow source files | M | A4 (scripts part) | adds files |
+| 7 | [A7](#a7-engine-invocation-config-files-command-line-version) Engine invocation | M | A6 (soft: shared packaging helper) | adds files/properties |
+| 8 | [A8](#a8-workflow-outputs-are-inferred-from-the-job-graph-not-from-the-targets) Workflow outputs from targets | S | none | yes (workflow outputs) |
+| 9 | [A9](#a9-workflow-input-parameters-are-created-per-file-not-per-slot) Workflow inputs per slot | M | A8; input from B3 | **yes**: parameter `@id`s |
+| 10 | [A10](#a10-non-file-parameters-are-not-recorded) Non-file parameters | M | A4, A9; A7 for config | adds entities |
+| 11 | [A11](#a11-parameter-connections) Parameter connections | M | A9, A10 | adds entities |
+| 12 | [A12](#a12-logs-and-benchmarks-are-not-captured) Logs and benchmarks | M | A2 (soft: checksums on logs) | adds files/properties |
+| 13 | [A13](#a13-missing-contextual-metadata) Contextual metadata | M | A4 (rule-tool part), A6 (README helper) | adds properties/options |
+| 14 | [A14](#a14-upgrade-to-ro-crate-13-and-workflow-run-crate-06) RO-Crate 1.3 / WRROC 0.6 | L | all of the above; `roc-validator` support | **yes**: versions |
+| none | [A15](#a15-validator-noise-to-report-upstream) Validator noise | none | none | upstream issues only |
+
+Dependency graph (an arrow means "should be merged before"):
+
+```mermaid
+graph LR
+  A2[A2 fixity] -.-> A1[A1 external files]
+  A1 -.-> A7[A7 engine invocation]
+  A1 -.-> A12[A12 logs + benchmarks]
+  A3[A3 small details]
+  A4[A4 tool model] --> A5[A5 environments]
+  A4 --> A6[A6 workflow source]
+  A6 -.-> A7[A7 engine invocation]
+  A8[A8 outputs from targets] --> A9[A9 inputs per slot]
+  A4 --> A10[A10 non-file params]
+  A9 --> A10
+  A7 -.-> A10
+  A9 --> A11[A11 connections]
+  A10 --> A11
+  A2 -.-> A12[A12 logs + benchmarks]
+  A4 --> A13[A13 contextual metadata]
+  A6 -.-> A13
+  A1 & A2 & A3 & A5 & A7 & A11 & A12 & A13 --> A14[A14 RO-Crate 1.3 / WRROC 0.6]
+```
+
+Dotted arrows are soft dependencies: the later PR can go first, but it will
+then need to change again.
+
+**What can run in parallel:**
+- A1, A2, A3, A4 and A8 have no hard dependencies and touch different code
+  paths, so they can be worked on at the same time. If A2 lands first, A1 can
+  include the content-addressed identifier option straight away; otherwise
+  that option follows in a small PR.
+- A1's "reference, don't include" mechanism is reused by A7 (excluded config
+  files) and A12 (excluded logs), hence the dotted arrows.
+- After A4 is merged, A5, A6 and A13 can proceed in parallel.
+- A12 can be done at any point.
+
+**Release notes:** A4 and A9 change existing output that downstream consumers
+may rely on (instrument IDs, parameter IDs). Group them in one minor release
+with a changelog entry, and don't spread them across several releases.
+
+---
+
+## Part A: Plugin issues, in pull request order
 
 ### A1. Metadata-only mode writes data entities outside the crate root (bug)
+
+*PR 1. No hard dependencies. The content-addressed identifier option uses the
+checksum helper from A2.*
 
 **Observed:** With `--report-rocrate-metadata-only`, an input outside the working
 directory is recorded as `"@id": "../ext/extra.txt"` and listed in the root's
@@ -62,89 +153,153 @@ directory is recorded as `"@id": "../ext/extra.txt"` and listed in the root's
 URI". RO-Crate 1.3 says that a locally packaged file's `@id` "MUST be a URI Path
 relative to the RO Crate Root" ([1.3 data entities](https://www.researchobject.org/ro-crate/specification/1.3/data-entities.html#file-data-entity)).
 A path starting with `../` points outside the root, so the crate breaks when it is
-moved, zipped or published.
+moved, zipped or published. An absolute-URI `File` is a Web-based data entity,
+which "SHOULD at the time of RO-Crate creation be directly downloadable".
 
 **Code:** `provenance_files.py:187` (the `os.path.relpath` fallback in
 `_copy_external_relative_files`).
 
-**Suggested fixes (pick one):**
-- Use an absolute `file://` URI (or a real `https://` URL if one is known) for
-  external files, as a Web-based data entity. Do not add it to `hasPart` as a
-  local file, and note that `file://` URIs are not portable.
-- In RO-Crate 1.3, use a local identifier (`#external-extra.txt`) typed `File`
-  with `localPath` (see the 1.3 note on `File` entities with `#` identifiers).
-  It is then not a data entity, but it can still be the `object` of an action.
-- Fail, or warn, in metadata-only mode when inputs lie outside the working
-  directory, and tell the user to use ZIP mode.
+The general problem is how to identify a file that the run used or produced but
+that is *not in the crate* and cannot be downloaded. The same need comes up for
+large outputs, sensitive data, and logs or config files that are left out on
+purpose (A7, A12), so the fix should be a reusable "reference, don't include"
+mechanism, not a special case for metadata-only mode.
 
-**Considerations:** Whichever option is chosen, test it explicitly: add a
-check to `validator.py` or a unit test that asserts no data entity `@id` starts
-with `../` or `/`.
+#### Prior art
 
-### A2. Workflow definition is incomplete: only the main Snakefile is packaged
+- **Five Safes RO-Crate** ([5s-Crate 0.4, Sensitive data](https://trefx.uk/5s-crate/0.4/#sensitive-data)):
+  data that is only accessible inside a Trusted Research Environment is typed
+  `DigitalDocument` (not `File`), with an `urn:uuid:` identifier, `name` and
+  `encodingFormat`. Access restrictions are expressed with
+  `hasDigitalDocumentPermission` → `DigitalDocumentPermission`
+  (`permissionType` `http://schema.org/ReadPermission`, `grantee` the project).
+  Its [security considerations](https://trefx.uk/5s-crate/0.4/#security-considerations)
+  recommend UUID v5 hashing, so that identifiers do not reveal the sensitive
+  names they are derived from. All of these terms are in the RO-Crate 1.1
+  context.
+- **COMPSs** ([workflow provenance docs](https://compss-doc.readthedocs.io/en/latest/Sections/04_Ecosystem/05_Workflow_Provenance/01_Run/04_Result.html)):
+  with `data_persistence: False` (the default), datasets are not copied. In a
+  published example ([WorkflowHub 1047](https://doi.org/10.48546/workflowhub.workflow.1047.1)),
+  each external file is a `File` with `@id`
+  `file://<hostname>/<absolute path>`, `name` (basename), `contentSize`,
+  `dateModified` and `sdDatePublished`. These entities are listed in the
+  root's `hasPart` and used as `object`/`result` of the `CreateAction`. Size
+  and modification date stand in for a file version. Downsides: the
+  identifiers expose the HPC node name, the username and the home directory
+  layout. The `file://` URI resolves only on that host, yet the entity is
+  typed and listed as a downloadable data entity.
+- **arcp URI scheme** ([draft-soilandreyes-arcp](https://datatracker.ietf.org/doc/draft-soilandreyes-arcp/),
+  [library docs](https://arcp.readthedocs.io/)), also used by RO-Crate for
+  [absolute identifiers of non-web crates](https://www.researchobject.org/ro-crate/specification/1.1/appendix/relative-uris.html):
+  - `arcp://uuid,<uuid>/<path>`: a random or UUID v5 "archive" identifier
+    plus a path inside it. This keeps the directory structure of a group of
+    external files without revealing where they live.
+  - `arcp://ni,sha-256;<base64url digest>/`: content-addressed, so it
+    identifies the exact bytes that were used. This also helps with B2.
+  - `arcp://name,<name>/<path>`: a name-based identifier, which leaks names
+    like `file://` does.
 
-**Observed:** These are missing from the crate:
-- `include:` files (`rules/extra.smk`)
-- `script:` files (`scripts/merge.py`)
-- the `configfile:` (`config.yaml`)
-- `notebook:` files and `wrapper:` sources (not tested, but there is no code
-  path for them)
+#### Suggested fix (RO-Crate 1.1 compatible)
 
-Scripts are found only by heuristically parsing shell commands for an
-interpreter (`provenance_files.py:98`), so `script:` rules get the action
-description "Execute rule merge" (`provenance.py:153`).
+1. **If the file has a real URL, use it.** Inputs from Snakemake storage
+   plugins (`s3://`, `https://`, `gs://`, …) already have a query URI.
+   Record them as Web-based `File` data entities with that `@id`, and add
+   `contentUrl` if the download URL differs.
+2. **Otherwise, reference the file without claiming it is downloadable.**
+   Type it `DigitalDocument`, not `File`, and do not list it in the root's
+   `hasPart`. It is still reachable as an action's `object`/`result`, which
+   the profiles allow for any entity. Record:
+   - `name`: the basename
+   - `encodingFormat`, `contentSize`, `dateModified`
+   - `sha256`, once A2 is in place
+   - `sdDatePublished`, as COMPSs does, if useful
+3. **Choose the identifier with a plugin option**, e.g.
+   `--report-rocrate-external-id {uuid,content,file}`:
+   - `uuid` (default): `urn:uuid:` UUID v5 of the absolute path (and
+     hostname), so it is stable across reports of the same run without
+     revealing the path. Alternatively, use `arcp://uuid,<uuid v5 of the
+     external directory>/<relative path>`, which keeps the structure of
+     related files visible.
+   - `content`: `arcp://ni,sha-256;…/`, identifying exactly the bytes used.
+     Two different paths with the same content collapse into one entity,
+     which is correct for provenance but surprising for readers, so set
+     `name` from the path. Needs the A2 hashing helper.
+   - `file`: `file://<hostname>/<absolute path>`, as COMPSs does. This is
+     informative on a shared cluster, but exposes host, user and directory
+     names, so make it opt-in only.
+4. **Apply the same choice in ZIP mode.** Today, external files are always
+   copied into `_EXTERNAL/`. Add `--report-rocrate-external-files {copy,reference}`
+   so large or sensitive external inputs can be referenced rather than
+   packaged. Metadata-only mode always uses `reference`.
+5. **Optional, access restrictions:** when the user marks paths as
+   restricted, add `hasDigitalDocumentPermission` as 5s-Crate does. This is
+   probably a follow-up PR rather than part of A1.
 
-**Spec:** [Workflow RO-Crate 1.0](https://about.workflowhub.eu/Workflow-RO-Crate/1.0/)
-expects the crate to contain the workflow so that it can be re-run. For engine
-configuration files, the [Provenance Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#engine-configuration-files)
-says the config file "SHOULD be added to the `object` attribute of the
-corresponding `OrganizeAction`".
+**Considerations:**
+- Check that `runcrate report` and `roc-validator` accept a `DigitalDocument`
+  as an action's `object`/`result`, and that `exampleOfWork` links to its
+  `FormalParameter` still work. Neither profile requires `File` there, but
+  tools may assume it. If they fail, report that upstream rather than going
+  back to `File`.
+- A UUID v5 needs a namespace. Use a fixed namespace UUID per plugin, or one
+  derived from the run (e.g. the workflow-run `CreateAction`), and document
+  the choice. A per-run namespace stops identifiers from being correlated
+  across crates.
+- Add a unit test, and a check in `validator.py`, asserting that no data
+  entity `@id` starts with `../` or `/`.
+- RO-Crate 1.3 adds `File` entities with `#` identifiers and `localPath` for
+  files "deliberately not present". When upgrading (A14), consider that form
+  for the `file` option, since it records the path without implying that the
+  file can be downloaded.
+- The general question of how to reference non-included and non-downloadable
+  files may be worth raising with the RO-Crate community, so that 5s-Crate,
+  COMPSs and this plugin converge (see B6).
 
-**Suggested fixes:**
-- Package every Snakefile module from Snakemake's workflow object (e.g.
-  `workflow.included`/the source cache), and list them in the main workflow's
-  `hasPart`. Type them `["File", "SoftwareSourceCode"]` with
-  `programmingLanguage` Snakemake.
-- For `script:`/`notebook:` rules, take the path from the rule object
-  (`rule.script`, `rule.notebook`), not from the shell command. Package the
-  file as `["File", "SoftwareSourceCode"]` with its `programmingLanguage`.
-  Link it from the rule's tool, either as the tool's `@id` or through
-  `mainEntity`/`hasPart` (see
-  [Tool wrapper dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies)).
-- Add each `configfile:` and `--configfile` file to the crate, and put it in
-  the `OrganizeAction`'s `object`.
-- For `wrapper:`, record the wrapper URL/version as the tool `@id`/`url`.
+### A2. File entities lack fixity and size
 
-**Considerations:** Some `include:`/`module:` sources are remote (GitHub,
-`github()` objects). For those, use web-based data entities rather than copying.
-Keep the plain-text `HowToStep.description` (rule source) as it is.
+*PR 2. No dependencies.*
 
-### A3. Non-file parameters are not recorded (params, config, wildcards, resources)
+**Observed:** Files have only `name`, `encodingFormat` and `exampleOfWork`.
 
-**Observed:** Only files appear as `object`/`result`. `params: mode=fast`, the
-config values, wildcards (`s=a`), `threads` and `resources` are absent.
+**Suggested fix:** Add `contentSize`, `dateModified` (from the file's mtime) and
+`sha256`. `sha256` is defined in the workflow-run context the crate already
+loads, so this works with RO-Crate 1.1. Checksums let consumers detect whether
+a file changed after the run (see B2). Set `encodingFormat` to more specific
+types where known. Snakefiles currently get `text/plain`; `text/x-snakemake`
+or the language entity could be used instead.
 
-**Spec:** The [Workflow Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/workflow_run_crate/)
-and the [Process Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/)
-represent non-file values as `PropertyValue` entities in `object`, linked to
-their `FormalParameter` through `exampleOfWork`. The plugin already has the
-`PropertyValue` code path (`_link_action_value_to_parameter`), but nothing
-feeds it.
+**Considerations:**
+- Hashing large outputs costs time. Use streaming reads, and consider an
+  option to skip hashing above a size limit.
+- Put the hashing in a helper that A6, A7 and A12 can reuse for the files they
+  add.
 
-**Suggested fixes:**
-- For each job, add one `PropertyValue` per `params` entry, wildcard and
-  (optionally) `threads`/`resources` entry. Link each to a tool-level
-  `FormalParameter`, e.g. `#parameter/tool/count/params/named/mode`.
-- At workflow level, flatten the effective `config` into `PropertyValue`s for
-  the workflow `CreateAction`, or just reference the config file (A2).
-- Use `additionalType` `Text`/`Integer`/`Float`/`Boolean`/`Collection` as in the
-  profile examples.
+### A3. Small profile details: actionStatus, position, singleton values
 
-**Considerations:** Params can be callables or large objects, so serialise
-conservatively (`str()`, with a length cap). Config may contain secrets: add
-an opt-out or an exclude list before recording config values.
+*PR 3. No dependencies.*
 
-### A4. Default tool modelling: every Conda package becomes an instrument
+These are OPTIONAL or RECOMMENDED in the profiles and cheap to add, using
+information the plugin already has:
+
+- `actionStatus` (`http://schema.org/CompletedActionStatus`) on `ControlAction`s
+  and `CreateAction`s. Snakemake only reports successful jobs, so this is always
+  "completed" ([Provenance Run Crate requirements](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#requirements)).
+- `position` on each `HowToStep`, from a topological order of the rule graph.
+  The profile only requires that a step which needs another step's outputs has
+  a higher position. The ordering is already computed in
+  `_add_precedes_relations` (`provenance_graph.py:25`), but the builder never
+  writes it out.
+- `startTime`/`endTime` on `ControlAction`s, copied from their `CreateAction`.
+- Singleton arrays: `_compact_single_value_properties`
+  (`rocrate_builder.py:277`) only compacts `result`/`output`, so `object`/`input`
+  still trigger "SHOULD be represented as a single value" warnings
+  ([1.1 JSON-LD appendix](https://www.researchobject.org/ro-crate/specification/1.1/appendix/jsonld.html)).
+  Apply it to every property.
+
+### A4. Tool model: every Conda package becomes an instrument
+
+*PR 4. No dependencies. A5, A6, A10 and A13 build on it. Changes existing
+output.*
 
 **Observed:** When `--report-rocrate-main-tool` is not given, the `plot` action
 has six instruments: `jq` plus `_openmp_mutex`, `libgcc`, `libgcc-ng`, `libgomp`
@@ -168,18 +323,22 @@ switch between two models.
 **Considerations:**
 - Consider listing only the packages explicitly named in the environment YAML
   in `softwareRequirements`. The full resolved list would still be available
-  through the packaged environment file or an exported lock file (see A9).
+  through the packaged environment file (A5).
 - Package `@id`s are `#tool_N`. For conda-forge/bioconda packages, absolute
   IDs are more reusable, e.g. a purl (`pkg:conda/conda-forge/jq@1.7.1`) or the
   package URL. They would also satisfy the RECOMMENDED "SoftwareApplication id
   SHOULD be an absolute URI".
 - The fallback package URL `https://anaconda.org/search?q=…` is a search page,
   not the package. Prefer `https://anaconda.org/<channel>/<name>`.
+- Update the README sections on `main-tool` and on how tools are modelled.
 
-### A5. Conda environment linked with `subjectOf` instead of `buildInstructions`
+### A5. Conda and container environments via buildInstructions
+
+*PR 5. Depends on A4.*
 
 **Observed:** The rule tool links its environment YAML with `subjectOf`
-(`rocrate_builder.py:423`). Nothing links it when no main tool is set (A4).
+(`rocrate_builder.py:423`). Nothing links it when no main tool is set, which
+A4 fixes.
 
 **Spec:** [Tool runtime environment](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-runtime-environment):
 "environment files are indicated as `buildInstructions` for either the
@@ -191,11 +350,83 @@ YAML `encodingFormat` `application/yaml`, and ideally `conformsTo` a Conda
 environment-file identifier. Keep `subjectOf` only if it is still wanted for
 backwards compatibility.
 
-**Considerations:** Do the same for `container:` and `apptainer:` directives
-using [`containerImage`](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-container-images)
-on the `CreateAction`.
+**Considerations:**
+- Do the same for `container:` and `apptainer:` directives, using
+  [`containerImage`](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-container-images)
+  on the `CreateAction`.
+- Optionally also package an exported explicit lock file of the resolved
+  environment (`conda list --explicit`), since the YAML alone does not pin
+  transitive packages.
 
-### A6. Workflow outputs are inferred from the job graph, not from the targets
+### A6. Workflow source is incomplete: include, script, notebook, wrapper
+
+*PR 6. The `script:`/`notebook:` part depends on A4. The module part could be
+split out as a separate PR with no dependencies.*
+
+**Observed:** These are missing from the crate:
+- `include:` files (`rules/extra.smk`)
+- `script:` files (`scripts/merge.py`)
+- `notebook:` files and `wrapper:` sources (not tested, but there is no code
+  path for them)
+
+Scripts are found only by heuristically parsing shell commands for an
+interpreter (`provenance_files.py:98`), so `script:` rules get the action
+description "Execute rule merge" (`provenance.py:153`).
+
+**Spec:** [Workflow RO-Crate 1.0](https://about.workflowhub.eu/Workflow-RO-Crate/1.0/)
+expects the crate to contain the workflow so that it can be re-run.
+
+**Suggested fixes:**
+- Package every Snakefile module from Snakemake's workflow object (e.g.
+  `workflow.included`/the source cache), and list them in the main workflow's
+  `hasPart`. Type them `["File", "SoftwareSourceCode"]` with
+  `programmingLanguage` Snakemake.
+- For `script:`/`notebook:` rules, take the path from the rule object
+  (`rule.script`, `rule.notebook`), not from the shell command. Package the
+  file as `["File", "SoftwareSourceCode"]` with its `programmingLanguage`.
+  Link it from the rule tool introduced in A4 through `mainEntity` or
+  `hasPart` (see
+  [Tool wrapper dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies)).
+  Use "Run script scripts/merge.py" as the action description.
+- For `wrapper:`, record the wrapper URL/version as a `SoftwareApplication`
+  linked from the rule tool.
+
+**Considerations:**
+- Some `include:`/`module:` sources are remote (GitHub, `github()` objects).
+  Use web-based data entities for those rather than copying them.
+- Factor out a "package a workflow source file" helper, which A7 and A13 can
+  reuse.
+
+### A7. Engine invocation: config files, command line, version
+
+*PR 7. Soft dependency on A6 (shared packaging helper).*
+
+**Observed:**
+- The `configfile:` (`config.yaml`), any `--configfile`, and the `--profile`
+  config files are not in the crate.
+- The Snakemake command line and targets are not recorded.
+- `#snakemake` and the language entity carry the version of Snakemake that
+  generated the report, not necessarily the one that ran the jobs (documented
+  in the README).
+
+**Spec:** [Engine configuration files](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#engine-configuration-files):
+the config file "SHOULD be added to the `object` attribute of the
+corresponding `OrganizeAction`".
+
+**Suggested fixes:**
+- Package the config files and add them to the `OrganizeAction`'s `object`.
+- Record the report-generation command (`sys.argv`) and the targets as the
+  `OrganizeAction`'s `description`. Make clear that this is the report command,
+  which may differ from the command that ran the jobs (see B1).
+- Read the Snakemake version from `.snakemake/metadata` if a future Snakemake
+  version stores it, and raise this upstream with Snakemake.
+
+**Considerations:** Config files may contain secrets or local paths. Add an
+option to exclude them, and reference excluded files with the A1 mechanism.
+
+### A8. Workflow outputs are inferred from the job graph, not from the targets
+
+*PR 8. No dependencies. A9 builds on it.*
 
 **Observed:** Only files that are produced and never consumed become workflow
 outputs (`rocrate_builder.py:508-519`). `results/summary.txt`, a target of
@@ -205,7 +436,13 @@ outputs (`rocrate_builder.py:508-519`). `results/summary.txt`, a target of
 rule, or the CLI targets, e.g. `dag.targetfiles`) as the workflow outputs, and
 fall back to the current heuristic when they are unavailable.
 
-### A7. Workflow input parameters are created per file, not per slot
+**Considerations:** Do this in the same code that A9 reworks for inputs, and
+introduce a small "workflow interface" helper there that A9 can extend.
+
+### A9. Workflow input parameters are created per file, not per slot
+
+*PR 9. Depends on A8. Changes parameter `@id`s. Raise B3 with the community
+first, or in parallel.*
 
 **Observed:** The two samples gave workflow parameters `reads` and `reads_2`
 (`rocrate_builder.py:521-534`). With 1,000 samples there would be 1,000
@@ -219,10 +456,61 @@ agreement (see B3). Alternatively, model each slot's files as a single
 `Collection` value (see
 [multi-file objects](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-multi-file-objects)).
 
-**Considerations:** Snakemake has no declared workflow interface, which is why
-this is heuristic. See also B3.
+**Considerations:**
+- Snakemake has no declared workflow interface, which is why this is
+  heuristic. See also B3.
+- Fix the parameter `@id` scheme here, since A10 and A11 build on it.
 
-### A8. Logs and benchmarks are not captured
+### A10. Non-file parameters are not recorded
+
+*PR 10. Depends on A4 (parameters attach to the rule tool) and A9 (parameter
+`@id` scheme). The config part depends on A7.*
+
+**Observed:** Only files appear as `object`/`result`. `params: mode=fast`, the
+config values, wildcards (`s=a`), `threads` and `resources` are absent.
+
+**Spec:** The [Workflow Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/workflow_run_crate/)
+and the [Process Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/)
+represent non-file values as `PropertyValue` entities in `object`, linked to
+their `FormalParameter` through `exampleOfWork`. The plugin already has the
+`PropertyValue` code path (`_link_action_value_to_parameter`), but nothing
+feeds it.
+
+**Suggested fixes:**
+- For each job, add one `PropertyValue` per `params` entry, wildcard and
+  (optionally) `threads`/`resources` entry. Link each to a tool-level
+  `FormalParameter`, e.g. `#parameter/tool/count/params/named/mode`.
+- At workflow level, flatten the effective `config` into `PropertyValue`s for
+  the workflow `CreateAction`. If that is too much, rely on the config file
+  packaged in A7.
+- Use `additionalType` `Text`/`Integer`/`Float`/`Boolean`/`Collection` as in the
+  profile examples.
+
+**Considerations:** Params can be callables or large objects, so serialise
+conservatively (`str()`, with a length cap). Config may contain secrets: reuse
+A7's exclude option.
+
+### A11. Parameter connections
+
+*PR 11. Depends on A9 and A10, so that every parameter it connects exists.*
+
+**Observed:** There is no `connection` / `ParameterConnection`, so the data
+flow between rules is only implicit, through shared files.
+
+**Spec:** [Representing parameter connections](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#representing-parameter-connections)
+(MAY). Connections to workflow output parameters are referenced from the
+workflow; other connections are referenced from the receiving step.
+
+**Suggested fix:** Derive connections from the same shared-file analysis as
+`_add_precedes_relations`, with an output parameter of rule X as
+`sourceParameter` and the input parameter of rule Y that consumes the same file
+as `targetParameter`. Add workflow input → tool input and tool output →
+workflow output connections from the A8/A9 interface.
+
+### A12. Logs and benchmarks are not captured
+
+*PR 12. Soft dependency on A2 (checksums for the added files). Otherwise
+independent, so it can be done at any point.*
 
 **Observed:** `log:` (`logs/count_*.log`) and `benchmark:` (`bench/plot.tsv`)
 files are not in the crate.
@@ -238,35 +526,15 @@ files are not in the crate.
   on the job `CreateAction`.
 
 **Considerations:** Logs can be large or contain paths and usernames, so make
-including them optional.
+including them optional, and reference excluded logs with the A1 mechanism.
 
-### A9. File entities lack fixity and size
+### A13. Missing contextual metadata
 
-**Observed:** Files have only `name`, `encodingFormat` and `exampleOfWork`.
+*PR 13. The rule-tool part depends on A4. Soft dependency on A6 (README
+packaging helper). Could be split into a "workflow metadata options" PR and a
+"rule tool URL/version" PR.*
 
-**Suggested fix:** Add `contentSize`, `dateModified` (from the file's mtime) and
-a checksum (`sha256` in RO-Crate 1.2+; or `identifier`/`sha256` from the
-workflow-run context). This lets consumers detect whether a file changed after
-the run (see B1). Set `encodingFormat` to more specific types where known.
-Snakefiles currently get `text/plain`; `text/x-snakemake` or the language
-entity could be used instead.
-
-### A10. Missing provenance detail that the profile defines
-
-These are all OPTIONAL in the profile, but cheap to add:
-
-- `actionStatus` (`http://schema.org/CompletedActionStatus`) on `ControlAction`s
-  and `CreateAction`s. Snakemake only reports successful jobs, so this is always
-  "completed" ([Provenance Run Crate, ControlAction](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#requirements)).
-- `position` on each `HowToStep`, from a topological order of the rule graph.
-  The rule ordering is already computed in `_add_precedes_relations`
-  (`provenance_graph.py:25`), but the builder never writes it out.
-- `startTime`/`endTime` on `ControlAction`s.
-- [`connection` / `ParameterConnection`](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#representing-parameter-connections)
-  between rule output and input parameters, which can be derived from the same
-  shared-file analysis.
-
-### A11. Missing contextual metadata (RECOMMENDED validator findings)
+These cause the remaining RECOMMENDED validator findings:
 
 - `CreateAction`s have no `agent` unless `agent-*` is set. Root `author` is
   missing unless `researcher-*` is set, and `publisher` falls back to a Person,
@@ -280,32 +548,18 @@ These are all OPTIONAL in the profile, but cheap to add:
   `version`, remote URL as `url`), without making them up.
 - Rule tools (`#rule-tool-*`) lack `url` and `version`. They could point back
   into the workflow (`url` = workflow URL plus a rule anchor), or carry the
-  workflow version.
+  workflow version. See B5.
 - No `README.md`. Package the workflow's README when one exists next to the
   Snakefile. `_add_supplemental_files` already handles `about` and
   `encodingFormat` for it, but nothing adds the file.
-- Singleton arrays: `_compact_single_value_properties`
-  (`rocrate_builder.py:277`) only compacts `result`/`output`, so `object`/`input`
-  still trigger "SHOULD be represented as a single value" warnings
-  ([1.1 JSON-LD appendix](https://www.researchobject.org/ro-crate/specification/1.1/appendix/jsonld.html)).
-  Apply it to every property, or rely on `ro-crate-py`'s own compaction.
 - The workflow-run `CreateAction` reuses the crate `description` and has the
   generic `name` "workflow run". Give it a description of its own, e.g. the
-  Snakemake command line and targets.
+  targets that were built.
 
-### A12. Engine version and invocation not recorded faithfully
+### A14. Upgrade to RO-Crate 1.3 and Workflow Run Crate 0.6
 
-**Observed:** `#snakemake` and the language entity carry the version of
-Snakemake that generated the report, not necessarily the one that ran the jobs
-(documented in the README). The Snakemake command line, the targets and the
-profile are not recorded.
-
-**Suggested fixes:** Read the version recorded in `.snakemake/metadata` if a
-future Snakemake version stores it, and raise this upstream with Snakemake.
-Record the report-generation command (`sys.argv`) as the `OrganizeAction`
-`description`, and add the `--profile` config files to its `object` (A2).
-
-### A13. Profile and spec versions are outdated
+*PR 14. Do this last: it touches the output of every earlier PR. Blocked on a
+`roc-validator` release with the 0.6 profiles.*
 
 **Observed:** The crate declares RO-Crate 1.1 (`rocrate_builder.py:55`) and
 Workflow Run Crate 0.5, and validation is pinned to `provenance-run-crate-0.5`
@@ -313,16 +567,25 @@ Workflow Run Crate 0.5, and validation is pinned to `provenance-run-crate-0.5`
 [RO-Crate 1.3](https://www.researchobject.org/ro-crate/specification/1.3/) and
 [Provenance Run Crate 0.6](https://w3id.org/ro/wfrun/provenance/0.6).
 
-**Suggested fix:** Add an option to choose the output version (1.1/0.5 for
-WorkflowHub compatibility, 1.3/0.6 as the future default). Move to 1.3/0.6
-once `roc-validator` ships those profiles.
+**Suggested fix:** Add an option to choose the output version, with 1.1/0.5
+kept for WorkflowHub compatibility and 1.3/0.6 as the future default.
 
-**Considerations:** Workflow RO-Crate 1.0 is defined on RO-Crate 1.1, and the
-validator's `workflow-ro-crate-1.0` rules fail on 1.3 crates because of version
-mismatches, not real errors. Keep 1.1 as long as WorkflowHub deposit is a main
-use case. Also consider naming the ZIP `*.crate.zip`, as WorkflowHub expects.
+When upgrading, revisit:
+- A1: consider `File` with a `#` identifier and `localPath` for the `file`
+  identifier option.
+- A2: `sha256` becomes part of the RO-Crate 1.2+ context.
+- Profile entities need `Profile` in `@type` (already done).
 
-### A14. Validator noise to filter or report upstream
+**Considerations:**
+- Workflow RO-Crate 1.0 is defined on RO-Crate 1.1, and the validator's
+  `workflow-ro-crate-1.0` rules fail on 1.3 crates because of version
+  mismatches, not real errors. Keep 1.1 as long as WorkflowHub deposit is a
+  main use case.
+- Also consider naming the ZIP `*.crate.zip`, as WorkflowHub expects.
+
+### A15. Validator noise to report upstream
+
+*No PR. File upstream issues.*
 
 These `roc-validator` 0.11.4 findings are false positives on this crate:
 - "README.md SHOULD be about the crate / have text/markdown", reported although
@@ -330,8 +593,9 @@ These `roc-validator` 0.11.4 findings are false positives on this crate:
 - "SoftwareApplication id SHOULD be an absolute URI", reported for type IRIs
   such as `http://schema.org/SoftwareApplication`
 
-Report them upstream at <https://github.com/crs4/rocrate-validator/issues>
-rather than suppressing them in `validator.py`.
+Report them at <https://github.com/crs4/rocrate-validator/issues> rather than
+suppressing them in `validator.py`. Recheck them after A13, which adds a
+README.
 
 ---
 
@@ -340,7 +604,8 @@ rather than suppressing them in `validator.py`.
 These cannot be solved cleanly within the current Workflow Run Crate profiles.
 Raise them with the WRROC community
 (<https://github.com/ResearchObject/workflow-run-crate/issues>) before
-implementing a plugin-specific workaround.
+implementing a plugin-specific workaround. B3 should be raised before A9
+starts.
 
 ### B1. A "workflow run" assembled from several engine invocations
 
@@ -389,7 +654,7 @@ the time of use (checksums, or distinguishing the file entity from the file
 version used by an action).
 
 **Possible directions:**
-- Recommend checksums (A9) on data entities.
+- Recommend checksums (A2) on data entities.
 - Allow an action-specific value entity (a `PropertyValue`, or a `File` with a
   `#` identifier and checksum) when the packaged file differs from the one that
   was used.
@@ -401,7 +666,7 @@ version used by an action).
 
 **Observed:** Snakemake has no formal workflow-level inputs or outputs. Inputs
 and outputs are concrete files expanded from wildcards and config, so the
-plugin has to invent workflow `FormalParameter`s (A6, A7).
+plugin has to invent workflow `FormalParameter`s (A8, A9).
 
 **Profile gap:** The Workflow Run Crate expects the workflow's `input`/`output`
 `FormalParameter`s to describe the workflow's interface. It does not say what
@@ -437,7 +702,7 @@ per-job modelling is valid.
 ### B5. Tool identity for rules with inline shell commands
 
 **Observed:** A rule's "tool" is the rule itself plus its environment. It has no
-URL or version of its own (A11), which triggers the RECOMMENDED
+URL or version of its own (A13), which triggers the RECOMMENDED
 `url`/`version` findings for every rule tool.
 
 **Profile gap:** The profiles' SHOULDs for tool `url`/`version` assume tools
@@ -448,3 +713,27 @@ natural separate identity.
 **Possible direction:** Allow a tool to be identified as a part of the workflow
 (e.g. `@id` `Snakefile#rule-count`, with `isPartOf` the workflow), and treat
 the workflow's `version`/`url` as satisfying the tool's recommendation.
+
+### B6. Referencing files that are deliberately not in the crate
+
+**Observed:** Run crates often need to point at files that were used but cannot
+be included or downloaded: files outside the working directory (A1), large
+intermediates, sensitive data, or excluded logs and config. Each producer
+handles this differently:
+- 5s-Crate: `DigitalDocument` with a `urn:uuid:` identifier and permissions.
+- COMPSs: `File` with a host-specific `file://` URI, listed in `hasPart`.
+- RO-Crate 1.3: `File` with a `#` identifier and `localPath`.
+- This plugin: currently an invalid `../` path.
+
+**Profile gap:** The [Process Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/)
+says that `object`/`result` reference data entities, but does not say what to
+use when the data is not in the crate and is not on the web. RO-Crate 1.1
+expects absolute-URI `File`s to be downloadable.
+
+**Possible direction:** Agree on one recommended pattern across the Workflow
+Run Crate profiles and 5s-Crate:
+- which `@type` to use (`DigitalDocument` versus `File` with `localPath`)
+- which identifier forms are acceptable (`urn:uuid:` v5, `arcp://uuid,`,
+  `arcp://ni,`, `file://`), with their privacy implications
+- which fixity properties (`contentSize`, `dateModified`, `sha256`) SHOULD be
+  given, so the file can be recognised later
