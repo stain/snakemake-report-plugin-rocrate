@@ -16,3 +16,7 @@ __pycache__/
 
 # VSCode
 .vscode/*
+# Snakemake working state in the examples; keep the job metadata the
+# reporter reads, ignore created conda envs, logs and locks
+**/.snakemake/*
+!**/.snakemake/metadata/

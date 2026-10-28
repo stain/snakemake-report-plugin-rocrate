@@ -81,6 +81,7 @@ three decisions:
 
 | PR | Section | Size | Depends on | Changes existing output? |
 |---|---|---|---|---|
+| 0 | [A0](#a0-no-end-to-end-tests-of-the-examples) End-to-end tests with the examples | M | none | no (tests only) |
 | 1 | [A1](#a1-metadata-only-mode-writes-data-entities-outside-the-crate-root-bug) External / non-included files | M | A2 (soft: content-addressed IDs) | yes (bug fix, new options) |
 | 2 | [A2](#a2-file-entities-lack-fixity-and-size) File fixity and size | S | none | adds properties |
 | 3 | [A3](#a3-small-profile-details-actionstatus-position-singleton-values) Small profile details | S | none | adds properties |
@@ -95,12 +96,14 @@ three decisions:
 | 12 | [A12](#a12-logs-and-benchmarks-are-not-captured) Logs and benchmarks | M | A2 (soft: checksums on logs) | adds files/properties |
 | 13 | [A13](#a13-missing-contextual-metadata) Contextual metadata | M | A4 (rule-tool part), A6 (README helper) | adds properties/options |
 | 14 | [A14](#a14-upgrade-to-ro-crate-13-and-workflow-run-crate-06) RO-Crate 1.3 / WRROC 0.6 | L | all of the above; `roc-validator` support | **yes**: versions |
-| none | [A15](#a15-validator-noise-to-report-upstream) Validator noise | none | none | upstream issues only |
+| any (early) | [A15](#a15-no-ro-crate-previewhtml) RO-Crate preview | S | none | adds a file |
+| none | [A16](#a16-validator-noise-to-report-upstream) Validator noise | none | none | upstream issues only |
 
 Dependency graph (an arrow means "should be merged before"):
 
 ```mermaid
 graph LR
+  A0[A0 end-to-end tests] ==> A1 & A2 & A3 & A4 & A8
   A2[A2 fixity] -.-> A1[A1 external files]
   A1 -.-> A7[A7 engine invocation]
   A1 -.-> A12[A12 logs + benchmarks]
@@ -117,11 +120,17 @@ graph LR
   A2 -.-> A12[A12 logs + benchmarks]
   A4 --> A13[A13 contextual metadata]
   A6 -.-> A13
-  A1 & A2 & A3 & A5 & A7 & A11 & A12 & A13 --> A14[A14 RO-Crate 1.3 / WRROC 0.6]
+  A15[A15 preview]
+  A1 & A2 & A3 & A5 & A7 & A11 & A12 & A13 & A15 --> A14[A14 RO-Crate 1.3 / WRROC 0.6]
 ```
 
 Dotted arrows are soft dependencies: the later PR can go first, but it will
 then need to change again.
+
+**Do A0 first.** The end-to-end test, with a golden copy of the generated
+metadata, gives every later PR a reviewable diff of how the crate changes.
+The thick arrow means A0 should be merged before all other PRs, not only
+the ones it points to.
 
 **What can run in parallel:**
 - A1, A2, A3, A4 and A8 have no hard dependencies and touch different code
@@ -132,6 +141,8 @@ then need to change again.
   files) and A12 (excluded logs), hence the dotted arrows.
 - After A4 is merged, A5, A6 and A13 can proceed in parallel.
 - A12 can be done at any point.
+- A15 (the HTML preview) has no dependencies. Doing it early helps review
+  every later PR, since reviewers can see the output change in a browser.
 
 **Release notes:** A4 and A9 change existing output that downstream consumers
 may rely on (instrument IDs, parameter IDs). Group them in one minor release
@@ -140,6 +151,77 @@ with a changelog entry, and don't spread them across several releases.
 ---
 
 ## Part A: Plugin issues, in pull request order
+
+### A0. No end-to-end tests of the examples
+
+*PR 0. No dependencies. Do this before all other PRs.*
+
+**Observed:**
+- The unit tests (`tests/test_rocrate_builder.py`,
+  `tests/test_provenance_files.py`) call the builders with mocked jobs and
+  DAGs. Nothing runs Snakemake with `--reporter rocrate`.
+- The Snakemake-provided end-to-end test class (`TestReportBase` in
+  `tests/test_plugin.py`) is skipped with "Currently not working".
+- CI runs `pixi run -e dev test`, so none of the `examples/` are ever
+  executed. They can silently break, and the crates they produce are never
+  validated or reviewed.
+
+**Example requirements:**
+
+| Example | Run workflow | Report only from committed outputs |
+|---|---|---|
+| `feature-coverage` | seconds; needs only `jq` (from conda-forge) | yes |
+| `linear-elastic-plate-with-hole` | FEniCS/DOLFINx Conda env (large) | yes, checked: passes REQUIRED validation in seconds, without Conda |
+| `poisson-equation` | gmsh, FEniCS, tectonic Conda envs (large) | yes, checked: passes REQUIRED validation in seconds, without Conda |
+
+The two large examples commit their outputs and `.snakemake/metadata`. The
+reporter therefore works on a copy of them without running any job or
+creating any environment. Without environments, though, no package
+information is recorded, so these runs exercise the workflow structure but
+not the tool modelling.
+
+**Suggested fix:**
+1. **Full end-to-end test with `feature-coverage`** (marked e.g.
+   `@pytest.mark.e2e`):
+   - Copy `examples/feature-coverage/` (both `workflow/` and `external/`) to
+     `tmp_path`.
+   - Run the workflow, then the reporter with `profiles/rocrate` and
+     `profiles/rocrate-metadata-only`. Use the Snakemake API, or
+     `python -m snakemake` in a subprocess.
+   - Unzip the crate and assert:
+     - each feature in the example's README table appears;
+     - the external input is handled correctly (see A1; `xfail` until A1 is
+       fixed);
+     - `runcrate report` can read the crate.
+   - Compare the metadata, normalised by removing timestamps, versions and
+     dates, against a committed golden file
+     (`tests/data/feature-coverage.ro-crate-metadata.json`), and add an
+     explicit option to update it. Each later PR then shows its effect on
+     the crate as a diff of that file.
+2. **Two variants for Conda:**
+   - Without `--sdm conda` (always run): add `jq` to the pixi `dev`
+     environment so the `plot` rule finds it on `PATH`.
+   - With `--sdm conda` (a separate CI job, using conda-forge only, e.g.
+     with `setup-miniforge`): this is the only variant that tests the
+     package and runtime-environment code (A4, A5).
+3. **Report-only smoke tests for the two large examples:** copy the
+   git-tracked files of each example to `tmp_path`, and run only the
+   reporter with its `profiles/rocrate`, without `--sdm conda`. Assert that
+   validation passes. This keeps those examples' Snakefiles, profiles and
+   committed metadata working, without installing anything.
+4. **Fix or remove the skipped `TestReportBase`.** Find out why it is "not
+   working", or replace it with the tests above.
+
+**Considerations:**
+- Never run the tests in the source tree: Snakemake writes `.snakemake/`,
+  and the reporter writes `_EXTERNAL/` into the working directory (see A1).
+- Existing unit tests encode current behaviour that later PRs change on
+  purpose. For example,
+  `test_omitted_main_tool_uses_installed_packages_as_instruments` asserts
+  the behaviour that A4 replaces. Update them in those PRs.
+- The committed example crates (`examples/*/…-workflow-run.zip`) should be
+  regenerated by a script, not by hand, so that they stay consistent with
+  the code. That script can share the test's setup.
 
 ### A1. Metadata-only mode writes data entities outside the crate root (bug)
 
@@ -249,6 +331,37 @@ mechanism, not a special case for metadata-only mode.
   across crates.
 - Add a unit test, and a check in `validator.py`, asserting that no data
   entity `@id` starts with `../` or `/`.
+- ZIP mode copies external files into an `_EXTERNAL/` folder in the working
+  directory (`provenance.py:96-127`). It first runs `shutil.rmtree` on any
+  existing `_EXTERNAL/` there, and deletes it again at the end, so a
+  workflow's own `_EXTERNAL/` folder would be deleted without warning. Build
+  the staging tree in a temporary directory instead.
+- The copied file's original location is not recorded in the crate. The
+  plugin keeps it internally (the `"source path"` of the file node,
+  `provenance_files.py:83`) only to know what to copy. The `File` entity
+  `_EXTERNAL/ext/extra.txt` has just `@id`, `name` (the same `_EXTERNAL/…`
+  path), `encodingFormat` and `exampleOfWork`. Meanwhile, the packaged
+  Snakefile and the recorded shell command still use the original path
+  (`../ext/extra.txt`), and nothing links the two.
+- RO-Crate 1.3 has `localPath` for exactly this kind of link
+  ([1.3 data entities](https://www.researchobject.org/ro-crate/specification/1.3/data-entities.html#core-metadata-for-data-entities)).
+  A `File` with a `#` identifier "SHOULD" use `localPath` "to indicate that a
+  File could be found at that path in some circumstances", and Web-based
+  entities MAY use it for the path to download them to. `localPath` is in the
+  1.3 context, but not in the 1.1 context.
+  - **Now, on 1.1:** record the original path as the workflow refers to it
+    (`../ext/extra.txt`, relative to the working directory) in `description`,
+    or with an explicitly mapped term.
+  - **On 1.3 (A14):** use `localPath`. For a file copied to `_EXTERNAL/`,
+    `localPath: "../ext/extra.txt"` would also tell someone re-running the
+    workflow where to put the file. However, the spec only defines
+    `localPath` for `#` files and Web-based entities, not for files inside an
+    attached crate, and the value points outside the crate root. This is
+    worth raising with the RO-Crate community (see B6).
+  - Only record paths relative to the working directory, never absolute
+    ones. The folder structure under `_EXTERNAL/` already mirrors the path
+    below the common ancestor directory, which can include usernames, e.g.
+    `/home/<user>/…`.
 - RO-Crate 1.3 adds `File` entities with `#` identifiers and `localPath` for
   files "deliberately not present". When upgrading (A14), consider that form
   for the `file` option, since it records the path without implying that the
@@ -720,7 +833,63 @@ When upgrading, revisit:
   main use case.
 - Also consider naming the ZIP `*.crate.zip`, as WorkflowHub expects.
 
-### A15. Validator noise to report upstream
+### A15. No ro-crate-preview.html
+
+*Any time; suggested early. No dependencies.*
+
+**Observed:** Neither the ZIP nor the metadata-only output contains an HTML
+preview, so a human opening the crate (or a WorkflowHub or Zenodo landing
+page that shows the archive's files) sees only JSON-LD.
+
+**Spec:** [RO-Crate 1.1: RO-Crate Website](https://www.researchobject.org/ro-crate/specification/1.1/structure.html#ro-crate-website-ro-crate-previewhtml-and-ro-crate-preview_files)
+says the crate MAY include `ro-crate-preview.html`. If present, it MUST:
+- be valid HTML 5
+- be useful to users of the crate
+- contain a copy of the RO-Crate JSON-LD in a
+  `<script type="application/ld+json">` element in the `<head>`
+
+It SHOULD display at least the root data entity's metadata as static HTML,
+without the need for scripting. Extra resources go in
+`ro-crate-preview_files/`.
+
+**Options checked:**
+- **ro-crate-py built-in preview** (`ROCrate(..., gen_preview=True)`, version
+  0.16.0, already a dependency): renders the root and the data entities with
+  a Jinja template, and adds a `CreativeWork` entity for
+  `ro-crate-preview.html` that is `about` the root. However, it does **not**
+  embed the JSON-LD in the page, which the 1.1 MUST requires. It also doesn't
+  show actions, tools or parameters.
+- **`rochtml`** (npm [`ro-crate-html`](https://www.npmjs.com/package/ro-crate-html)
+  0.1.6, used for the examples): embeds the JSON-LD, statically renders the
+  root and every entity with links between them, and loads optional dynamic
+  features from unpkg.com. It is a Node.js tool, so it is not a reasonable
+  runtime dependency for a Python reporter plugin.
+
+**Suggested fix:**
+- Generate the preview in the plugin from its own Jinja template (Jinja2 is
+  already installed as a dependency of `rocrate`):
+  - embed the JSON-LD in `<head>`;
+  - render the root metadata statically;
+  - add a run summary: a table of the job `CreateAction`s with rule, start
+    and end time, inputs, outputs and tool, plus the workflow's inputs and
+    outputs.
+- Alternatively, use ro-crate-py's `gen_preview=True` and inject the JSON-LD
+  script element after writing. Report the missing JSON-LD upstream to
+  <https://github.com/ResearchObject/ro-crate-py/issues> either way.
+- Add `--report-rocrate-preview` (default on). In metadata-only mode, write
+  `ro-crate-preview.html` next to `ro-crate-metadata.json`.
+- Do not list the preview in the root's `hasPart`, as it is not payload.
+
+**Considerations:**
+- The page must not fetch external scripts by default: it may be opened
+  offline, or inside a Trusted Research Environment. Keep everything
+  inline, or under `ro-crate-preview_files/`.
+- Escape all values (rule source, shell commands, file names) when rendering.
+  These come from the workflow and may contain HTML-like text.
+- Regenerate the preview whenever the metadata changes. A stale preview
+  embeds stale JSON-LD.
+
+### A16. Validator noise to report upstream
 
 *No PR. File upstream issues.*
 
