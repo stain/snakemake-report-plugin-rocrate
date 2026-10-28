@@ -2,7 +2,8 @@
 
 A small, fast workflow that exercises the Snakemake features that matter for
 the RO-Crate reporter. It is meant for testing the reporter and for
-inspecting how each feature appears in the generated crate.
+inspecting how each feature appears in the generated crate. See
+[`TODO.md`](../../TODO.md) for the known gaps it demonstrates.
 
 | Rule | Features |
 |---|---|
@@ -24,7 +25,7 @@ outputs, logs and `.snakemake/metadata` are committed too, so the reporter
 can be re-run without re-running the workflow. The `ro-crate-preview.html`
 inside the ZIP was added afterwards with
 [`rochtml`](https://www.npmjs.com/package/ro-crate-html) 0.1.6, because the
-plugin does not generate a preview yet.
+plugin does not generate a preview yet (see A15 in the TODO).
 
 ## Running
 
