@@ -66,7 +66,9 @@ three decisions:
   context plus the workflow-run context
   (`https://w3id.org/ro/terms/workflow-run/context`, which defines `sha256`,
   `resourceUsage`, `connection`, `ParameterConnection`, `environment` and
-  `containerImage`), and schema.org terms such as `DigitalDocument`.
+  `containerImage`, `ContainerImage`), and schema.org terms such as
+  `DigitalDocument`. `buildInstructions` (A5) is not in either context for
+  1.1, so it must be added to `@context` as the 0.5 profile describes.
   1.3-only terms such as `localPath` wait for A14.
 - **Fix the tool model (A4) before anything that hangs metadata on tools.**
   Scripts (A6), non-file parameters (A10), environments (A5) and rule-tool
@@ -83,7 +85,7 @@ three decisions:
 | 2 | [A2](#a2-file-entities-lack-fixity-and-size) File fixity and size | S | none | adds properties |
 | 3 | [A3](#a3-small-profile-details-actionstatus-position-singleton-values) Small profile details | S | none | adds properties |
 | 4 | [A4](#a4-tool-model-every-conda-package-becomes-an-instrument) Tool model | M | none | **yes**: changes instruments, `--main-tool` meaning |
-| 5 | [A5](#a5-conda-and-container-environments-via-buildinstructions) Environments | S | A4 | yes (`subjectOf` → `buildInstructions`) |
+| 5 | [A5](#a5-tool-runtime-environment-and-container-images) Runtime environment, containers | M | A4 | yes (`subjectOf` → `buildInstructions`) |
 | 6 | [A6](#a6-workflow-source-is-incomplete-include-script-notebook-wrapper) Workflow source files | M | A4 (scripts part) | adds files |
 | 7 | [A7](#a7-engine-invocation-config-files-command-line-version) Engine invocation | M | A6 (soft: shared packaging helper) | adds files/properties |
 | 8 | [A8](#a8-workflow-outputs-are-inferred-from-the-job-graph-not-from-the-targets) Workflow outputs from targets | S | none | yes (workflow outputs) |
@@ -310,53 +312,140 @@ entity instead, so the two kinds of rule are modelled differently.
 
 **Code:** `rocrate_builder.py:403` (`if not preferred_package and package_ids:`).
 
-**Spec:** In the [Process Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#specifying-software-dependencies),
-`instrument` is *the* tool that was run, and its dependencies go in
-`softwareRequirements`. The [Provenance Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies)
-uses `mainEntity` to highlight the wrapped tool.
+**Spec:** The profiles separate four concerns:
 
-**Suggested fix:** Always create the rule tool (`#rule-tool-…`) as the single
-instrument, and list the Conda packages in its `softwareRequirements`. Turn
-`--main-tool` into a way to set `mainEntity` on the rule tool, rather than a
-switch between two models.
+| Concern | Where it is defined | Property | Attached to |
+|---|---|---|---|
+| The tool that ran | [Process Run Crate requirements](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#requirements) | `instrument` | `CreateAction` |
+| Named software it needs | [Process Run Crate: Specifying software dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#specifying-software-dependencies); [Provenance Run Crate: Tool wrapper dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies) | `softwareRequirements`, `mainEntity` | the tool |
+| How to build its runtime environment | [Provenance Run Crate: Tool runtime environment](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-runtime-environment) | `buildInstructions` | `HowToStep` / `HowTo` |
+| Which container image was used | [Process Run Crate: Representing container images](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-container-images) | `containerImage` | `CreateAction` |
+
+The Provenance Run Crate builds on the Process Run Crate, so all of these
+apply. A4 handles the first two rows; A5 handles the last two.
+
+The current code puts the whole resolved Conda environment into the first or
+second row. The profile instead says that `softwareRequirements` names
+software, while "a more reproducible definition of a tool's runtime
+environment" belongs in an environment file referenced by `buildInstructions`.
+
+**Suggested fix:**
+- Always create the rule tool (`#rule-tool-…`) as the single `instrument` of
+  each job's `CreateAction`, and as the `workExample` of its `HowToStep`.
+- List in its `softwareRequirements` only the packages *declared* in the
+  rule's environment YAML (`jq`), with the version that was actually
+  installed (`1.7.1`, from `conda-meta`). Transitive packages such as
+  `libgcc` and `_openmp_mutex` do not go here: they are part of the runtime
+  environment (A5).
+- Use `mainEntity` for the wrapped tool, as in
+  [Tool wrapper dependencies](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-wrapper-dependencies):
+  the script for `script:` rules (A6), or the package chosen with
+  `--main-tool`. `--main-tool` then only selects `mainEntity`, rather than
+  switching between two models.
+- For `envmodules:`, list the module names and versions in
+  `softwareRequirements`. There is no environment file to reference.
 
 **Considerations:**
-- Consider listing only the packages explicitly named in the environment YAML
-  in `softwareRequirements`. The full resolved list would still be available
-  through the packaged environment file (A5).
-- Package `@id`s are `#tool_N`. For conda-forge/bioconda packages, absolute
-  IDs are more reusable, e.g. a purl (`pkg:conda/conda-forge/jq@1.7.1`) or the
-  package URL. They would also satisfy the RECOMMENDED "SoftwareApplication id
-  SHOULD be an absolute URI".
-- The fallback package URL `https://anaconda.org/search?q=…` is a search page,
-  not the package. Prefer `https://anaconda.org/<channel>/<name>`.
+- Package identifiers: the profile examples use the registry's
+  version-specific URL as the `@id` (`https://pypi.org/project/numpy/1.26.2/`).
+  For Conda, the package URL recorded in `conda-meta`
+  (`https://conda.anaconda.org/conda-forge/linux-64/jq-1.7.1-hd590300_0.conda`)
+  is absolute and version-specific. It also satisfies the RECOMMENDED
+  "SoftwareApplication id SHOULD be an absolute URI". Use
+  `https://anaconda.org/<channel>/<name>` as `url`. The current fallback,
+  `https://anaconda.org/search?q=…`, is a search page and should go.
+- Version property: the 0.5 examples use `version`, while 0.6 uses
+  `softwareVersion` and says not to give both. `roc-validator` 0.11.4 accepts
+  either. Keep `softwareVersion` for packages, and revisit in A14.
+- Add an option to choose between declared packages only (the default) and
+  all installed packages in `softwareRequirements`, for users who want the
+  full list in the metadata itself.
 - Update the README sections on `main-tool` and on how tools are modelled.
 
-### A5. Conda and container environments via buildInstructions
+### A5. Tool runtime environment and container images
 
-*PR 5. Depends on A4.*
+*PR 5. Depends on A4. Changes existing output (`subjectOf` → `buildInstructions`).
+Could be split into a Conda PR and a container PR.*
 
-**Observed:** The rule tool links its environment YAML with `subjectOf`
-(`rocrate_builder.py:423`). Nothing links it when no main tool is set, which
-A4 fixes.
+**Observed:**
+- The rule tool links its environment YAML with `subjectOf`
+  (`rocrate_builder.py:423`), and nothing links it when no main tool is set.
+- The resolved environment (all installed packages) is only represented as a
+  list of tool entities (A4).
+- `container:`/`containerized:` directives and `--sdm apptainer` are not
+  recorded at all.
 
-**Spec:** [Tool runtime environment](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-runtime-environment):
-"environment files are indicated as `buildInstructions` for either the
-`HowToStep` (for a given step) or the `HowTo` (for the whole workflow)."
+**Spec:**
+- [Provenance Run Crate: Tool runtime environment](https://www.researchobject.org/workflow-run-crate/profiles/0.5/provenance_run_crate/#tool-runtime-environment):
+  "environment files are indicated as `buildInstructions` for either the
+  `HowToStep` (for a given step) or the `HowTo` (for the whole workflow)". Its
+  example types a Conda YAML as `File` with `encodingFormat`
+  `application/yaml` and `conformsTo` the Conda environment-file
+  documentation (a `WebPageElement`). It says `encodingFormat` and/or
+  `conformsTo` SHOULD be given for machine-readable environment files.
+- In 0.5 on RO-Crate 1.1, `buildInstructions` (a CodeMeta term) is in neither
+  the RO-Crate 1.1 context nor the workflow-run context. The 0.5 profile says
+  to add `{"buildInstructions": "https://codemeta.github.io/terms/buildInstructions"}`
+  to the `@context`. RO-Crate 1.2+ contexts include it.
+- [Process Run Crate: Representing container images](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-container-images):
+  `containerImage` on the `CreateAction`, pointing to a `ContainerImage`
+  entity. This SHOULD have at least `additionalType` (`DockerImage` or
+  `SIFImage` from the workflow-run namespace), `registry` and `name`, and MAY
+  have `tag` and `sha256`. Alternatively, `containerImage` can be a plain URL
+  string. All of these terms are in the workflow-run context.
+- The profile notes that "runtime environment" means software, not
+  environment variables. Do not use the workflow-run `environment` property
+  for this: it is for environment variable settings.
 
-**Suggested fix:** Set `buildInstructions` on the `HowToStep` of each rule that
-has `conda:`, and on the workflow for a global `conda:` directive. Give the
-YAML `encodingFormat` `application/yaml`, and ideally `conformsTo` a Conda
-environment-file identifier. Keep `subjectOf` only if it is still wanted for
-backwards compatibility.
+**Suggested fixes:**
+1. **Conda environment files:**
+   - Package each rule's environment YAML and set it as `buildInstructions` of
+     that rule's `HowToStep`. A global `conda:` directive goes on the workflow
+     (`HowTo`).
+   - Type the YAML `File` with `encodingFormat` `application/yaml` and
+     `conformsTo` the Conda environment-file page, exactly as in the profile
+     example.
+   - Add the `buildInstructions` term mapping to the crate's `@context`
+     (`self.crate.metadata.extra_contexts`, next to `WORKFLOW_RUN_CONTEXT`).
+   - Remove `subjectOf` from the rule tool.
+2. **Pinned and resolved environments:**
+   - If Snakemake's pin file (`<env>.<platform>.pin.txt`, next to the YAML)
+     exists, package it as a second `buildInstructions` entry. Give it its own
+     `conformsTo`, pointing to the Conda explicit-specification format.
+   - Otherwise, generate an equivalent explicit specification from the job's
+     `conda-meta` records (each package's URL and MD5) and package that
+     instead. This is where the transitive packages that A4 removes from
+     `softwareRequirements` end up, in a form that `conda create --file` can
+     re-instantiate.
+   - Name the generated file after the environment hash Snakemake uses, so that
+     rules that share an environment share the file.
+3. **Container images:**
+   - For jobs run with a `container:` image (per rule or global), add
+     `containerImage` on the job's `CreateAction`. Point it to a
+     `ContainerImage` entity with:
+     - `additionalType`: `DockerImage` for `docker://` images, `SIFImage` for
+       local `.sif` files
+     - `registry` and `name`
+     - `tag`
+     - `sha256`: from the image digest if pinned (`@sha256:`), or computed
+       from the cached `.sif` in `.snakemake/singularity/`
+   - For `containerized:` (a single image containing all the Conda
+     environments), use the same image for every job, and still record the
+     Conda `buildInstructions` per step.
+   - Use a stable `@id` per image (e.g. `#container-<sha256>`, or the
+     registry reference), so that jobs share the entity.
 
 **Considerations:**
-- Do the same for `container:` and `apptainer:` directives, using
-  [`containerImage`](https://www.researchobject.org/workflow-run-crate/profiles/0.5/process_run_crate/#representing-container-images)
-  on the `CreateAction`.
-- Optionally also package an exported explicit lock file of the resolved
-  environment (`conda list --explicit`), since the YAML alone does not pin
-  transitive packages.
+- The profile defines `buildInstructions` only on the prospective side
+  (`HowToStep`/`HowTo`): it describes how the environment *should* be built,
+  not what was actually installed for a particular job. The resolved
+  environment from step 2 is retrospective information that has no defined
+  place on the `CreateAction`. See B7.
+- An image used by `--sdm apptainer` may have been pulled long before the run,
+  and the tag may now point to a different image. Prefer the digest of the
+  cached image actually used.
+- Check that `runcrate` still handles the crate, since it may only read
+  `instrument`.
 
 ### A6. Workflow source is incomplete: include, script, notebook, wrapper
 
@@ -574,6 +663,9 @@ When upgrading, revisit:
 - A1: consider `File` with a `#` identifier and `localPath` for the `file`
   identifier option.
 - A2: `sha256` becomes part of the RO-Crate 1.2+ context.
+- A4: switch package versions to `softwareVersion` only, as 0.6 prefers.
+- A5: drop the explicit `buildInstructions` context mapping, which the 1.2+
+  context includes.
 - Profile entities need `Profile` in `@type` (already done).
 
 **Considerations:**
@@ -737,3 +829,27 @@ Run Crate profiles and 5s-Crate:
   `arcp://ni,`, `file://`), with their privacy implications
 - which fixity properties (`contentSize`, `dateModified`, `sha256`) SHOULD be
   given, so the file can be recognised later
+
+### B7. Retrospective runtime environment of a tool run
+
+**Observed:** Snakemake records, per job, which Conda environment (by hash) or
+container image was used, and the plugin can read the exact installed packages
+from `conda-meta`. The environment YAML can change between runs, and an
+unpinned YAML resolves differently over time.
+
+**Profile gap:** The [Provenance Run Crate's tool runtime environment](https://www.researchobject.org/workflow-run-crate/profiles/provenance_run_crate/#tool-runtime-environment)
+puts `buildInstructions` on the `HowToStep`/`HowTo`. That is prospective: how
+to build the environment. For containers, the [Process Run Crate](https://www.researchobject.org/workflow-run-crate/profiles/process_run_crate/#representing-container-images)
+has a retrospective property, `containerImage` on the `CreateAction`. There is
+no equivalent for package environments: no way to say "this job ran in this
+resolved environment (this lock file)". The profile also leaves "listing all
+possible package environment systems" out of scope, so there are no agreed
+`conformsTo` identifiers for Conda explicit specifications, Snakemake pin
+files, `pixi.lock`, `requirements.txt` and similar files.
+
+**Possible directions:**
+- A retrospective property on the `CreateAction`, e.g. a `runtimeEnvironment`
+  analogous to `containerImage`, pointing to the resolved environment file or
+  an entity describing the instantiated environment.
+- A small registry, in the profile or in ro-terms, of `conformsTo`
+  identifiers for common environment and lock-file formats.
