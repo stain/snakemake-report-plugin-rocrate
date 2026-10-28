@@ -203,6 +203,40 @@ The reporter writes `poisson-equation-workflow-run.zip` in the example
 directory. See the [example README]((https://github.com/snakemake/snakemake-report-plugin-rocrate/blob/main/examples/poisson-equation/snakemake/README.md)
 for more information about the workflow and its configuration.
 
+### Feature coverage
+
+A small, fast workflow that exercises the Snakemake features relevant to the
+reporter (`include:`, `script:`, `run:`, `conda:`, `log:`, `benchmark:`,
+wildcards, and an input outside the workflow directory). It needs only `jq`,
+which Snakemake installs from conda-forge:
+
+```bash
+cd examples/feature-coverage/workflow
+
+snakemake --software-deployment-method conda --cores 1
+bash run_snakemake.sh
+```
+
+See the [example README](examples/feature-coverage/README.md) for details.
+
+### Example crates
+
+Each example directory contains a crate generated with its
+`profiles/rocrate/config.yaml`:
+
+- `examples/linear-elastic-plate-with-hole/fenics-dolfinx/workflow-run.zip`
+- `examples/poisson-equation/snakemake/poisson-equation-workflow-run.zip`
+- `examples/feature-coverage/workflow/feature-coverage-workflow-run.zip`
+
+For the first two, the reporter ran on the committed outputs and
+`.snakemake/metadata` without re-running the workflow. The Conda
+environments were created with `--conda-create-envs-only` when the crates
+were generated, so the recorded package versions are those resolved then,
+not necessarily the ones used to produce the committed outputs. The
+`ro-crate-preview.html` in each ZIP was added afterwards with
+[`rochtml`](https://www.npmjs.com/package/ro-crate-html) 0.1.6, as the
+plugin does not yet generate a preview.
+
 ## Profile validation
 
 Profile 0.5 is validated directly with the rules distributed by

@@ -1,0 +1,2 @@
+channels: [conda-forge]
+dependencies: [jq=1.7.1]

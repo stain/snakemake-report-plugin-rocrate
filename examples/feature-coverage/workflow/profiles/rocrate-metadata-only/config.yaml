@@ -1,0 +1,6 @@
+report-rocrate-metadata-only: true
+report-rocrate-run-name: "Snakemake feature coverage"
+report-rocrate-run-description: "Small test workflow exercising Snakemake features relevant to the RO-Crate reporter: configfile, include, shell, script, run, conda, log, benchmark, params, wildcards and an input outside the workflow directory."
+report-rocrate-run-license: "CC-BY-4.0"
+report-rocrate-main-tool: "jq"
+report-rocrate-validation-severity: "REQUIRED"

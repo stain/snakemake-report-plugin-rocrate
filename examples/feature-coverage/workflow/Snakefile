@@ -1,0 +1,72 @@
+# Small workflow that exercises the Snakemake features relevant to the
+# RO-Crate reporter. The comment above each rule names the features it uses.
+
+# configfile: workflow configuration packaged with the run
+configfile: "config.yaml"
+
+# include: workflow source split across several files
+include: "rules/extra.smk"
+
+SAMPLES = config["samples"]
+
+
+rule all:
+    input:
+        "results/summary.txt",
+        "results/plot.json",
+        "results/stats.json",
+        "results/extra.txt",
+
+
+# shell:, named input, wildcards, params from config, log:
+rule count:
+    input:
+        reads="data/{s}.txt",
+    output:
+        "results/{s}.count",
+    params:
+        mode=config["mode"],
+    log:
+        "logs/count_{s}.log",
+    shell:
+        "wc -l {input.reads} > {output} 2> {log}"
+
+
+# script: (external Python script), unnamed inputs from expand()
+rule merge:
+    input:
+        expand("results/{s}.count", s=SAMPLES),
+    output:
+        "results/summary.txt",
+    script:
+        "scripts/merge.py"
+
+
+# conda: (per-rule environment), benchmark:, named inputs
+rule plot:
+    input:
+        summary="results/summary.txt",
+        ref="data/ref.json",
+    output:
+        "results/plot.json",
+    conda:
+        "envs/jq.yaml"
+    benchmark:
+        "bench/plot.tsv"
+    shell:
+        "jq -n --arg s \"$(cat {input.summary})\" '{{summary:$s}}' > {output}"
+
+
+# run: (inline Python executed inside the Snakemake process)
+rule stats:
+    input:
+        "results/summary.txt",
+    output:
+        "results/stats.json",
+    run:
+        import json
+        import statistics
+
+        counts = [int(line.split()[0]) for line in open(input[0])]
+        with open(output[0], "w") as out:
+            json.dump({"samples": len(counts), "mean_lines": statistics.mean(counts)}, out)
