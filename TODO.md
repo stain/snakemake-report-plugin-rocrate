@@ -171,6 +171,70 @@ with a changelog entry, and don't spread them across several releases.
 
 ---
 
+## Release, catalog and pull request conventions
+
+### Getting the plugin released and into the catalog
+
+The [Snakemake plugin catalog](https://snakemake.github.io/snakemake-plugin-catalog/)
+lists every PyPI package named `snakemake-report-plugin-*`, and includes
+`docs/intro.md` and `docs/further.md` from the repository's `main` branch. As
+of 2026-10-28, the plugin is only on TestPyPI (0.1.0), so it is not listed.
+
+| Step | Who | Status (2026-10-28) |
+|---|---|---|
+| Docs PR: re-add `docs/intro.md` and `docs/further.md` (branch `docs/plugin-catalog`, commit `0a16770`) | us | raised by the user |
+| Merge #19 "chore: update project metadata", which fixes the TestPyPI metadata problems simleo reported on #4 | maintainers | open |
+| Pending trusted publisher on pypi.org (workflow `release-please.yml`, environment `pypi`) | maintainers | fbartusch said on 2026-10-16 he would set it up; unconfirmed |
+| Merge release PR #4 "chore(main): release 0.1.0"; check https://pypi.org/project/snakemake-report-plugin-rocrate/ | maintainers | open |
+| Catalog rebuild (daily, 04:50 UTC); check `…/plugins/report/rocrate.html` | automatic | after the release |
+
+Context:
+- The docs files existed before (`f33342f`). simleo removed them on
+  2026-09-29 (`9159953` merged the intro into the README; `8fb0064` moved
+  `further.md` to `CONTRIBUTING.md`), probably not knowing that the catalog
+  uses those paths. The docs PR description explains this.
+- `main` requires a reviewed PR, and only the three maintainers (fbartusch,
+  simleo, M-Jafarkhani) can trigger a release.
+- M-Jafarkhani asked on #4 (2026-10-26) which channel to install from; a
+  suggested answer was drafted for the user.
+
+### Keeping pull requests small and easy to review
+
+- PR titles must be Conventional Commits (`conventional-prs.yml`), and
+  release-please builds the changelog from them. Use the type users notice,
+  e.g. `fix: mark failed jobs with FailedActionStatus`. Changes to existing
+  output (A4, A9, A17, A19) need `feat!:` or a `BREAKING CHANGE:` footer, and
+  should ship together in one release.
+- Run `pixi run -e dev check` before pushing.
+- One TODO item per PR. Large items can be split as noted (A5, A6, A13).
+  Do *not* mention `TODO.md` or its item numbers upstream: the notes are
+  private. Describe the problem, link the spec, and show a before/after
+  snippet of the affected entities.
+- A0 first. Its golden metadata file makes every later PR's effect on the
+  crate visible as a JSON diff.
+- No refactoring inside feature PRs. Introduce shared helpers (hashing, file
+  packaging, the "reference, don't include" mechanism) in the first PR that
+  needs them, or in a small `refactor:` PR.
+- Update tests that encode old behaviour in the same PR, and update the
+  README section for every new or changed option.
+- Raise the Part B questions with the Workflow Run Crate community before
+  the PRs that depend on them (B3 before A9, B6 before A22), and link the
+  discussions from the PRs.
+
+### Where things live
+
+- This plan (`TODO.md`, `CWLPROV.md`) is tracked only on the private branch
+  `docs/rocrate-completeness-todo` in the user's fork. It is checked out as a
+  second worktree at `.claude/notes/` (`.claude/` is in `.git/info/exclude`).
+  PR branches are worked on in the main checkout and always start from
+  `main`, never from this branch.
+- The feature-coverage example, the three committed example crates and the
+  `.gitignore` rule for `.snakemake/` working state are also only on this
+  branch so far. They go upstream with A0: the example and the `.gitignore`
+  rule in the A0 PR. For the ZIPs, either commit them through the A0
+  regeneration script or leave them out, since binaries are hard to review.
+  Their READMEs must not link to `TODO.md` upstream.
+
 ## Part A: Plugin issues, in pull request order
 
 ### A0. No end-to-end tests of the examples
