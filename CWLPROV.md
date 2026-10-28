@@ -371,8 +371,9 @@ other implementations. RO-Crate's single JSON-LD file plus an HTML preview
 
 ## Candidate additions to the plan
 
-New items suggested by the lessons above, to discuss before changing
-`TODO.md`:
+These have been added to `TODO.md`: lesson 7 as A18, lesson 3 as A19,
+lesson 5 as A20, lesson 13 as A21, lesson 12 as A22 and lesson 17 as A23.
+The rest were folded into existing items (A0, A2, A6, A13, B2 and B6).
 
 | Lesson | Candidate item | Likely position in the plan |
 |---|---|---|
